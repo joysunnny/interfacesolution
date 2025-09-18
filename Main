@@ -1,0 +1,11 @@
+import spoon.Launcher;
+import com.example.demo.AutowiredAnalyzerProcessor;
+
+public class Main {
+    public static void main(String[] args) {
+        Launcher launcher = new Launcher();
+        launcher.addInputResource("src/main/java/com/example/demo");
+        launcher.addProcessor(new AutowiredAnalyzerProcessor());
+        launcher.run();
+    }
+}
