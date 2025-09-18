@@ -1,0 +1,108 @@
+import spoon.processing.AbstractProcessor;
+import spoon.reflect.code.CtInvocation;
+import spoon.reflect.declaration.CtClass;
+import spoon.reflect.declaration.CtField;
+import spoon.reflect.declaration.CtMethod;
+import spoon.reflect.declaration.CtParameter;
+import spoon.reflect.declaration.ModifierKind;
+import spoon.reflect.reference.CtTypeReference;
+import spoon.reflect.visitor.filter.TypeFilter;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public class AutowiredAnalyzerProcessor extends AbstractProcessor<CtClass<?>> {
+
+    @Override
+    public void process(CtClass<?> aClass) {
+        // Step 1: Check if the class is a Spring RestController
+        if (isRestController(aClass)) {
+            System.out.println("--- Analyzing RestController: " + aClass.getQualifiedName());
+
+            // Step 2: Find all @Autowired interface fields
+            for (CtField<?> field : aClass.getFields()) {
+                if (isAutowiredInterface(field)) {
+                    System.out.println("  Found @Autowired Interface: " + field.getType().getQualifiedName());
+
+                    // Step 3: Find and analyze method calls on this interface
+                    analyzeMethodCalls(aClass, field.getType());
+                }
+            }
+        }
+    }
+
+    private boolean isRestController(CtClass<?> aClass) {
+        return aClass.getAnnotations().stream()
+                .anyMatch(a -> a.getAnnotationType().getSimpleName().equals("RestController"));
+    }
+
+    private boolean isAutowiredInterface(CtField<?> field) {
+        return field.getAnnotations().stream()
+                .anyMatch(a -> a.getAnnotationType().getSimpleName().equals("Autowired")) &&
+                field.getType().getDeclaration() instanceof spoon.reflect.declaration.CtInterface;
+    }
+
+    private void analyzeMethodCalls(CtClass<?> controller, CtTypeReference<?> interfaceType) {
+        // Find all method invocations in the controller's body
+        List<CtInvocation<?>> invocations = controller.getElements(new TypeFilter<>(CtInvocation.class));
+
+        for (CtInvocation<?> invocation : invocations) {
+            // Check if the invocation is on our autowired interface
+            if (invocation.getExecutable().getDeclaringType().equals(interfaceType)) {
+                System.out.println("\n--- Found call to: " + interfaceType.getSimpleName() + "." + invocation.getExecutable().getSimpleName());
+                
+                // Step 4: Find the implementing class and the exact method
+                CtClass<?> implementationClass = findImplementation(interfaceType);
+                if (implementationClass != null) {
+                    System.out.println("  --> Tracing to Implementation Class: " + implementationClass.getQualifiedName());
+
+                    // Step 5: Extract details of the implemented method
+                    extractMethodDetails(implementationClass, invocation.getExecutable().getSimpleName(), invocation.getExecutable().getParameters());
+                }
+            }
+        }
+    }
+
+    private CtClass<?> findImplementation(CtTypeReference<?> interfaceType) {
+        // This is the core logic: iterate through all classes to find the one that implements the interface
+        for (CtClass<?> potentialImpl : getFactory().getModel().getElements(new TypeFilter<>(CtClass.class))) {
+            Set<CtTypeReference<?>> superInterfaces = potentialImpl.getSuperInterfaces();
+            if (superInterfaces.stream().anyMatch(i -> i.equals(interfaceType))) {
+                // Return the concrete class that implements the interface
+                return potentialImpl;
+            }
+        }
+        return null;
+    }
+
+    private void extractMethodDetails(CtClass<?> implClass, String methodName, List<CtParameter<?>> parameters) {
+        for (CtMethod<?> method : implClass.getMethods()) {
+            if (method.getSimpleName().equals(methodName) &&
+                method.getParameters().size() == parameters.size() &&
+                isParameterMatch(method.getParameters(), parameters)) {
+
+                System.out.println("\n- Method Details:");
+                System.out.println("  Name: " + method.getSimpleName());
+                System.out.println("  Parameters: " + method.getParameters().stream()
+                        .map(p -> p.getType().getSimpleName() + " " + p.getSimpleName())
+                        .collect(Collectors.joining(", ", "(", ")")));
+                System.out.println("  Body:\n" + method.getBody());
+                System.out.println("  Fields in this class:");
+                implClass.getFields().forEach(field -> {
+                    System.out.println("    - " + field.getType().getSimpleName() + " " + field.getSimpleName());
+                });
+            }
+        }
+    }
+
+    private boolean isParameterMatch(List<CtParameter<?>> implParams, List<CtParameter<?>> invParams) {
+        for (int i = 0; i < implParams.size(); i++) {
+            if (!implParams.get(i).getType().equals(invParams.get(i).getType())) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
