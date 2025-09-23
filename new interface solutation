@@ -1,0 +1,94 @@
+import spoon.processing.AbstractProcessor;
+import spoon.reflect.code.CtInvocation;
+import spoon.reflect.code.CtExpression;
+import spoon.reflect.declaration.*;
+import spoon.reflect.reference.CtExecutableReference;
+import spoon.reflect.reference.CtTypeReference;
+import spoon.reflect.visitor.filter.TypeFilter;
+
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public class AutowiredAnalyzerProcessor extends AbstractProcessor<CtClass<?>> {
+
+    @Override
+    public void process(CtClass<?> aClass) {
+        if (isRestController(aClass)) {
+            System.out.println("--- Analyzing RestController: " + aClass.getQualifiedName());
+
+            for (CtField<?> field : aClass.getFields()) {
+                if (isAutowiredInterface(field)) {
+                    CtTypeReference<?> interfaceType = field.getType();
+                    System.out.println("  Found @Autowired Interface: " + interfaceType.getQualifiedName());
+
+                    // analyze all method calls
+                    analyzeMethodCalls(aClass, field, interfaceType);
+                }
+            }
+        }
+    }
+
+    private boolean isRestController(CtClass<?> aClass) {
+        return aClass.getAnnotations().stream()
+                .anyMatch(a -> a.getAnnotationType().getSimpleName().equals("RestController"));
+    }
+
+    private boolean isAutowiredInterface(CtField<?> field) {
+        return field.getAnnotations().stream()
+                .anyMatch(a -> a.getAnnotationType().getSimpleName().equals("Autowired")) &&
+                field.getType().getDeclaration() instanceof CtInterface;
+    }
+
+    private void analyzeMethodCalls(CtClass<?> controller, CtField<?> autowiredField, CtTypeReference<?> interfaceType) {
+        List<CtInvocation<?>> invocations = controller.getElements(new TypeFilter<>(CtInvocation.class));
+
+        for (CtInvocation<?> invocation : invocations) {
+            CtExpression<?> target = invocation.getTarget();
+            if (target != null && target.toString().equals(autowiredField.getSimpleName())) {
+                CtExecutableReference<?> execRef = invocation.getExecutable();
+
+                System.out.println("\n--- Found call: " + interfaceType.getSimpleName() + "." + execRef.getSimpleName());
+
+                CtClass<?> implClass = findImplementation(interfaceType);
+                if (implClass != null) {
+                    System.out.println("  --> Implementation: " + implClass.getQualifiedName());
+                    extractMethodDetails(implClass, execRef);
+                } else {
+                    System.out.println("  (No implementation found for " + interfaceType.getSimpleName() + ")");
+                }
+            }
+        }
+    }
+
+    private CtClass<?> findImplementation(CtTypeReference<?> interfaceType) {
+        for (CtClass<?> candidate : getFactory().getModel().getElements(new TypeFilter<>(CtClass.class))) {
+            Set<CtTypeReference<?>> superInterfaces = candidate.getSuperInterfaces();
+            if (superInterfaces.stream().anyMatch(i -> i.getQualifiedName().equals(interfaceType.getQualifiedName()))) {
+                if (candidate.getAnnotations().stream()
+                        .anyMatch(a -> a.getAnnotationType().getSimpleName().equals("Service"))) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void extractMethodDetails(CtClass<?> implClass, CtExecutableReference<?> execRef) {
+        for (CtMethod<?> method : implClass.getMethods()) {
+            if (method.getSimpleName().equals(execRef.getSimpleName())
+                    && method.getParameters().size() == execRef.getParameters().size()) {
+
+                System.out.println("\n- Method Details:");
+                System.out.println("  Name: " + method.getSimpleName());
+                System.out.println("  Parameters: " + method.getParameters().stream()
+                        .map(p -> p.getType().getSimpleName() + " " + p.getSimpleName())
+                        .collect(Collectors.joining(", ", "(", ")")));
+                System.out.println("  Body:\n" + method.getBody());
+                System.out.println("  Fields in " + implClass.getSimpleName() + ":");
+                implClass.getFields().forEach(f ->
+                        System.out.println("    - " + f.getType().getSimpleName() + " " + f.getSimpleName()));
+            }
+        }
+    }
+}
